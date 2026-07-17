@@ -1,11 +1,11 @@
-# STM32F411/BNO080 Self-Balancing Cube
+# STM32F411/ICM-20948 v2 Self-Balancing Cube
 
 Firmware and integration work for a three-axis reaction-wheel balancing cube based on the open-source [remrc/Self-Balancing-Cube](https://github.com/remrc/Self-Balancing-Cube) project.
 
 This version replaces the original ESP32 and MPU6050 with:
 
 - **STM32F411CEU6** microcontroller
-- **GY-BNO080** intelligent IMU
+- **ICM-20948 v2 breakout** intelligent IMU
 - Three **Nidec 24H** reaction-wheel motors with integrated drivers and quadrature encoders
 - **3S LiPo** power system
 
@@ -16,14 +16,14 @@ This version replaces the original ESP32 and MPU6050 with:
 
 **Current phase: planning and hardware bring-up.**
 
-The physical assembly and most electrical components are available. Firmware is being redesigned for the STM32F411 and BNO080; stable balancing firmware has not yet been released.
+The physical assembly and most electrical components are available. Firmware is being redesigned for the STM32F411 and ICM-20948 v2; stable balancing firmware has not yet been released.
 
 Development priorities:
 
 1. Verify power, signal voltages, and pin allocation.
 2. Bring up safe motor PWM and brake control.
 3. Validate all three quadrature encoders.
-4. Integrate and characterize the BNO080.
+4. Integrate and characterize the ICM-20948 v2.
 5. Implement calibration and fault handling.
 6. Tune vertex balancing.
 7. Add edge balancing and usability features.
@@ -37,8 +37,8 @@ The original Arduino/ESP32 sketch cannot be compiled unchanged for this hardware
 | Original design | This design |
 |---|---|
 | ESP32 Arduino | STM32CubeIDE and STM32 HAL |
-| MPU6050 raw accelerometer/gyro | BNO080 SH-2/SHTP quaternion and gyro reports |
-| Software complementary filter | BNO080 onboard sensor fusion |
+| MPU6050 raw accelerometer/gyro | ICM-20948 v2 raw accelerometer/gyro with STM32 attitude estimation |
+| Original complementary filter | STM32 complementary/Mahony filter using calibrated ICM-20948 data |
 | GPIO encoder interrupts | STM32 hardware timer encoder mode |
 | ESP32 LEDC PWM | STM32 timer PWM |
 | EEPROM API | Versioned internal Flash record with CRC |
@@ -52,7 +52,7 @@ The original three-wheel coordinate transformations and controller concept remai
 ### Required core components
 
 - STM32F411CEU6 board, typically a Black Pill-style board
-- GY-BNO080 breakout
+- ICM-20948 v2 breakout breakout
 - Three Nidec 24H motors with integrated motor electronics and encoder outputs
 - 3S LiPo battery and suitable connector
 - Regulated logic supply appropriate for the selected STM32 board and peripherals
@@ -64,11 +64,11 @@ The original three-wheel coordinate transformations and controller concept remai
 
 ### Items that must be verified before connection
 
-GY-BNO080 and STM32 breakout boards vary. Confirm from the actual boards and schematics:
+ICM-20948 v2 breakout and STM32 breakout boards vary. Confirm from the actual boards and schematics:
 
 - STM32 board HSE frequency; this project currently assumes 25 MHz
-- BNO080 regulator and permitted supply voltage
-- BNO080 logic voltage, pull-ups, level shifters, and interface-selection pins
+- ICM-20948 v2 regulator and permitted supply voltage
+- ICM-20948 v2 logic voltage, pull-ups, level shifters, and interface-selection pins
 - Motor encoder output voltage and whether it is push-pull or open-collector
 - Need for external encoder pull-ups
 - Maximum battery-divider voltage at a fully charged 3S pack
@@ -79,10 +79,12 @@ Do not assume that a module accepting 5 V power also has 5 V-safe signal pins.
 ## Planned firmware architecture
 
 ```text
-BNO080 interrupt
+ICM-20948 v2 interrupt
     -> SPI or I2C transfer
-    -> SH-2/SHTP packet parser
-    -> latest timestamped quaternion and gyro sample
+    -> register/FIFO driver and sample validation
+    -> calibrated accelerometer and gyro sample
+    -> STM32 attitude estimator
+    -> latest timestamped quaternion and angular rate
 
 100 Hz control timer
     -> validate IMU freshness
@@ -111,26 +113,30 @@ Initial timing targets:
 
 | Function | Target |
 |---|---:|
-| BNO080 Game Rotation Vector | 200 Hz |
-| BNO080 calibrated gyro | 200 Hz |
-| Balance controller | 100 Hz |
+| ICM-20948 accelerometer and gyro sampling | 500 Hz initially |
+| STM32 attitude estimator | 500 Hz initially |
+| Balance controller | 200 Hz initially |
 | Motor PWM | 20 kHz |
 | Maximum accepted IMU age | 30 ms initially |
 
 The final CubeMX clock tree must also produce a valid peripheral clock if USB CDC is enabled.
 
-## BNO080 approach
+## ICM-20948 v2 approach
 
-The BNO080 is a sensor hub, not a register-compatible replacement for the MPU6050. It uses the SH-2/SHTP protocol and produces fused sensor reports.
+The ICM-20948 is a 9-axis IMU containing a 3-axis gyroscope, 3-axis accelerometer, AK09916 3-axis magnetometer, FIFO, programmable filters, and an embedded DMP. It supports SPI up to 7 MHz or I2C up to 400 kHz. The initial controller will read raw accelerometer and gyroscope data and perform attitude estimation on the STM32.
 
-The initial controller will use:
+Initial sensing strategy:
 
-- **Game Rotation Vector** for orientation
-- **Calibrated Gyroscope** for angular velocity
+- Gyroscope and accelerometer sampled at 500 Hz
+- Configurable digital low-pass filtering
+- Startup stationary gyro-bias calibration
+- Six-axis complementary or Mahony quaternion estimator on the STM32
+- Magnetometer disabled for balancing initially because motor currents can disturb it
+- DMP integration deferred until the raw-data controller is validated
 
-Game Rotation Vector is preferred over a magnetometer-dependent rotation vector because the motors and their currents may disturb the local magnetic field.
+SPI is preferred for deterministic high-rate acquisition. I2C is acceptable for initial testing if the breakout exposes it more conveniently. Connect and use the data-ready interrupt. Every accepted sample must be timestamped locally, checked for plausibility, and monitored for staleness.
 
-SPI is preferred when the breakout exposes it correctly. I2C at 400 kHz is the fallback. In either case, the BNO080 interrupt and reset signals should be connected, and every sample should be timestamped locally.
+The exact v2 breakout must be inspected for its regulator, level shifting, pull-ups, address selection, and exposed interrupt/chip-select pins. The bare ICM-20948 has lower VDDIO limits than the STM32's 3.3 V logic, so compatibility depends on the breakout circuitry.
 
 ## Coordinate frames
 
@@ -142,7 +148,7 @@ The wheel numbering, positive rotation direction, encoder sign, and cube-frame f
 
 ## Calibration
 
-The MPU6050 accelerometer-offset procedure from the reference firmware will be replaced with quaternion reference calibration.
+The MPU6050 offset procedure will be replaced with two layers: stationary accelerometer/gyro calibration, followed by quaternion reference calibration for the mechanical vertex and edge poses.
 
 The firmware will store:
 
@@ -250,11 +256,11 @@ The reference Nidec interface uses active-low PWM. Treat that as a hypothesis to
 - Test direction, stationary noise, wraparound, and maximum speed.
 - Document positive directions and counts per revolution.
 
-### 4. BNO080
+### 4. ICM-20948 v2
 
-- Detect sensor reset and boot completion.
-- Receive quaternion and gyro reports continuously.
-- Measure report interval, age, and communication errors.
+- Verify WHO_AM_I and configure the register banks, ranges, filters, FIFO, and data-ready interrupt.
+- Read calibrated accelerometer and gyro samples continuously.
+- Run the STM32 attitude estimator and measure sample interval, age, bias, saturation, and communication errors.
 - Verify all cube-frame axes.
 - Confirm individual motor operation does not interrupt reports.
 
@@ -318,8 +324,8 @@ Manual motor commands will only work in a diagnostic state with the balance cont
 The firmware must disable motor output if any of these conditions occurs:
 
 - Boot or calibration is in progress
-- IMU data is missing, invalid, or stale
-- BNO080 reset is detected
+- IMU data is missing, invalid, saturated, or stale
+- ICM-20948 v2 identity/configuration check fails or a reset is detected
 - Tilt exceeds the allowed range
 - Battery voltage is below the safe threshold
 - Encoder plausibility fails
@@ -369,7 +375,7 @@ Version `v0.1.0` will require:
 - A clean build from documented STM32CubeIDE prerequisites
 - Documented pin map and wiring
 - Passing motor and encoder diagnostics
-- Timestamped and fault-monitored BNO080 reports
+- Timestamped and fault-monitored ICM-20948 v2 samples and STM32 attitude estimates
 - CRC-protected vertex calibration
 - Repeatable vertex balance without wheel-speed saturation
 - Reliable stale-IMU, over-tilt, low-battery, and software-fault shutdown
@@ -394,7 +400,7 @@ When making changes:
 
 This project is derived from and inspired by Remigijus's [Self-Balancing-Cube](https://github.com/remrc/Self-Balancing-Cube). The original repository established the mechanical concept, Nidec motor interface, wheel mixing, balance-control structure, and practical build approach.
 
-This repository is an independent STM32F411/BNO080 port and will require new firmware, calibration, validation, and gain tuning.
+This repository is an independent STM32F411/ICM-20948 v2 port and will require new firmware, calibration, validation, and gain tuning.
 
 ## License
 
