@@ -1,11 +1,11 @@
-# STM32F411/BNO080 Self-Balancing Cube Project Plan
+# STM32F411/ICM-20948 v2 Self-Balancing Cube Project Plan
 
 ## 1. Goal
 
 Port and improve the control system from [remrc/Self-Balancing-Cube](https://github.com/remrc/Self-Balancing-Cube) for this hardware:
 
 - STM32F411CEU6 microcontroller, using the board's 25 MHz HSE and a 100 MHz system clock
-- GY-BNO080 IMU
+- ICM-20948 v2 breakout IMU
 - Three Nidec 24H reaction-wheel motors with direction, active-low PWM, shared brake, and quadrature encoders
 - 3S LiPo power system
 
@@ -19,7 +19,7 @@ The first release target is safe, repeatable vertex balancing. Edge balancing an
 - Three 20 kHz motor PWM outputs
 - Three direction outputs and one shared brake output
 - Three hardware quadrature encoder interfaces where pin mapping permits
-- BNO080 quaternion and calibrated gyro acquisition
+- ICM-20948 v2 quaternion and calibrated gyro acquisition
 - Sensor-to-cube coordinate transformation
 - Quaternion-based vertex and edge calibration
 - State-feedback balance controller
@@ -42,8 +42,8 @@ The first release target is safe, repeatable vertex balancing. Edge balancing an
 | ESP32 Arduino | STM32CubeIDE with STM32 HAL |
 | ESP32 LEDC PWM | STM32 timer PWM |
 | GPIO encoder interrupts | Hardware timer encoder mode |
-| MPU6050 raw readings | BNO080 SH-2/SHTP reports |
-| Complementary filter | Game Rotation Vector plus calibrated gyro |
+| MPU6050 raw readings | ICM-20948 v2 register/FIFO accelerometer and gyro samples |
+| Original complementary filter | STM32 complementary/Mahony quaternion estimator |
 | Accelerometer offset calibration | Quaternion reference calibration |
 | EEPROM API | Internal Flash record with version and CRC |
 | BluetoothSerial | USB CDC or UART first; external wireless later |
@@ -54,12 +54,13 @@ The original three-wheel mixing and controller structure will be retained only a
 ## 4. Architecture
 
 ```text
-BNO080 INT
-    -> SPI/I2C transfer
-    -> SH-2/SHTP parser
-    -> latest timestamped quaternion + gyro sample
+ICM-20948 data-ready INT
+    -> SPI/I2C register or FIFO transfer
+    -> calibrated accelerometer + gyro sample
+    -> STM32 attitude estimator
+    -> latest timestamped quaternion + angular rate
 
-100 Hz control timer
+200 Hz control timer
     -> copy latest valid IMU sample
     -> read encoder counters
     -> calculate quaternion error from balance reference
@@ -76,7 +77,7 @@ Background tasks
     -> fault reporting
 ```
 
-The control interrupt must never print serial data, write Flash, or perform a blocking BNO080 transaction.
+The control interrupt must never print serial data, write Flash, or perform a blocking ICM-20948 v2 transaction.
 
 ## 5. Proposed repository structure
 
@@ -85,7 +86,7 @@ Core/Inc/
   app_config.h
   app_types.h
   balance_controller.h
-  bno080_driver.h
+  icm20948_driver.h
   calibration.h
   command_interface.h
   coordinate_transform.h
@@ -96,7 +97,7 @@ Core/Inc/
   telemetry.h
 Core/Src/
   balance_controller.c
-  bno080_driver.c
+  icm20948_driver.c
   calibration.c
   command_interface.c
   coordinate_transform.c
@@ -131,9 +132,10 @@ typedef struct { float x, y, z; } Vector3f;
 
 typedef struct {
     Quaternion orientation;
+    Vector3f accel_m_s2;
     Vector3f gyro_rad_s;
     uint32_t timestamp_us;
-    uint8_t accuracy;
+    uint8_t validity and saturation status;
     bool valid;
 } ImuSample;
 
@@ -186,9 +188,9 @@ Complete the CubeMX pin allocation before permanent harness or PCB wiring. If al
 - Configure timer input filtering if noise creates false counts.
 - Verify the direction sign of every wheel independently.
 
-### BNO080
+### ICM-20948 v2
 
-Prefer SPI if the exact GY-BNO080 board exposes it correctly. Otherwise use 400 kHz I2C with INT and RESET connected.
+Prefer SPI if the exact ICM-20948 v2 breakout board exposes it correctly. Otherwise use 400 kHz I2C with INT and RESET connected.
 
 Inspect the exact breakout for:
 
@@ -198,7 +200,7 @@ Inspect the exact breakout for:
 - Level shifters
 - Interface-selection pins
 
-Do not assume every board sold as GY-BNO080 has the same circuit.
+Do not assume every board sold as ICM-20948 v2 breakout has the same circuit.
 
 ### Battery ADC
 
@@ -210,22 +212,35 @@ Do not assume every board sold as GY-BNO080 has the same circuit.
 
 ## 8. IMU strategy
 
-Request:
+The ICM-20948 contains a 3-axis gyroscope, 3-axis accelerometer, AK09916 3-axis magnetometer, FIFO, programmable digital filters, and an embedded DMP. It supports SPI up to 7 MHz or I2C up to 400 kHz.
 
-- Game Rotation Vector at 100-200 Hz
-- Calibrated Gyroscope at 100-200 Hz
+Initial implementation:
 
-Avoid magnetometer-dependent heading initially because the reaction-wheel motors and their currents can disturb the magnetic field.
+- Read raw accelerometer and gyroscope data through SPI where possible
+- Configure suitable full-scale ranges and digital low-pass filters
+- Use the data-ready interrupt and optionally the FIFO
+- Sample accelerometer and gyro at 500 Hz initially
+- Calibrate stationary gyro bias at startup
+- Apply stored accelerometer scale/offset correction if characterization shows it is required
+- Run a six-axis complementary or Mahony quaternion estimator on the STM32 at 500 Hz
+- Run the balance controller at 200 Hz using the freshest complete estimate
+- Leave the magnetometer disabled for balancing initially because motor currents can disturb it
+- Defer DMP integration until the raw-data controller is validated
+
+SPI is preferred for predictable high-rate acquisition. I2C at 400 kHz is acceptable for early tests. Every sample must be timestamped locally and checked for stale data, clipping, impossible jumps, communication errors, and estimator validity.
+
+The exact v2 breakout must be inspected for regulator, voltage translation, pull-ups, address selection, and exposed INT/CS pins. The bare ICM-20948 has stricter VDDIO limits than 3.3 V, so breakout-level compatibility must be verified rather than assumed.
 
 Initial timing targets:
 
 ```text
-BNO080 report interval: 5 ms / 200 Hz
-Control-loop interval: 10 ms / 100 Hz
-Maximum accepted IMU sample age: 30 ms
+Accelerometer/gyro sampling: 2 ms (500 Hz)
+STM32 attitude estimation:   2 ms (500 Hz)
+Control-loop interval:       5 ms (200 Hz)
+Maximum accepted sample age: 15 ms initially
 ```
 
-The BNO080 interrupt should initiate a background transfer. Publish only complete, validated, timestamped samples to the controller. Missing reports, a sensor reset, an invalid quaternion, or unacceptable data age must disable the motors.
+The controller must enter a safe fault state if samples stop, WHO_AM_I/configuration checks fail, the sensor resets, readings saturate unexpectedly, or the attitude estimator becomes invalid.
 
 ## 9. Coordinate frames and calibration
 
@@ -322,7 +337,7 @@ Disable motor output when:
 
 - Firmware is booting or calibrating.
 - IMU data is missing, stale, or invalid.
-- A BNO080 reset is detected.
+- A ICM-20948 v2 reset is detected.
 - Tilt exceeds the configured fall threshold.
 - Battery voltage is below the safe threshold.
 - Encoder plausibility fails.
@@ -384,7 +399,7 @@ Invalid magic, version, length, or CRC must load safe defaults and require calib
 
 ### M0 - Hardware confirmation
 
-- Record exact STM32 board and GY-BNO080 module.
+- Record exact STM32 board and ICM-20948 v2 breakout module.
 - Confirm motor connector, encoder type, and logic voltage.
 - Confirm battery, regulator, divider, and brake wiring.
 - Complete a conflict-free CubeMX draft pin map.
@@ -416,14 +431,24 @@ Exit: each motor runs independently in both directions, and resets never cause m
 
 Exit: all encoders count reliably with documented signs.
 
-### M4 - BNO080 bring-up
+### M4 - ICM-20948 v2 bring-up
 
-- Implement reset and boot detection.
-- Implement SHTP/SH-2 transport.
-- Receive quaternion and gyro reports.
-- Timestamp samples and implement sensor-to-cube mapping.
+Tasks:
 
-Exit: continuous reports while motors run independently; IMU loss produces a safe fault.
+- Verify WHO_AM_I and banked-register access.
+- Configure accelerometer and gyro ranges, sample rates, filters, interrupt, and FIFO if used.
+- Calibrate stationary gyro bias.
+- Timestamp samples and monitor data age, saturation, and communication faults.
+- Implement sensor-to-cube mapping.
+- Implement and validate the STM32 attitude estimator.
+
+Exit criteria:
+
+- Raw accelerometer and gyro samples remain continuous while motors run individually.
+- Sample interval, bias, clipping, and estimator health are monitored.
+- All three cube-frame gyro signs are verified.
+- Static orientation estimates are stable and return correctly after slow tilts.
+- A disconnected, reset, or misconfigured IMU generates a safe fault.
 
 ### M5 - Calibration and persistence
 
@@ -496,9 +521,9 @@ Telemetry should include:
 | CEU6 timer pin conflicts | Finish CubeMX allocation before wiring |
 | Active-low PWM causes startup torque | Measure idle polarity and initialize PWM before brake release |
 | Encoder voltage exceeds GPIO limit | Verify electrically and level-shift if required |
-| GY-BNO080 variants differ | Inspect and document the exact module |
+| ICM-20948 v2 breakout variants differ | Inspect and document the exact module |
 | Fusion latency destabilizes control | Timestamp samples and tune controlled bandwidth |
-| Motor magnetic interference | Use Game Rotation Vector initially |
+| Motor magnetic interference | Keep the magnetometer out of the initial balance estimator |
 | Quaternion sign discontinuity | Enforce a consistent hemisphere |
 | Coordinate signs are incorrect | Centralize and bench-verify transforms |
 | Original gains have incompatible units | Retune from low output limits using explicit units |
@@ -513,7 +538,7 @@ The first successful release requires:
 - Clean STM32CubeIDE build from documented prerequisites
 - Documented wiring and pin map
 - Passing motor and encoder diagnostics
-- Timestamped and fault-monitored BNO080 reports
+- Timestamped and fault-monitored ICM-20948 v2 reports
 - CRC-protected vertex calibration
 - Repeatable vertex balance without wheel saturation
 - Reliable stale-IMU, over-tilt, low-battery, and software-fault shutdown
@@ -524,7 +549,7 @@ Edge balancing may be released later if it is not reliable enough for v0.1.0.
 
 ## 18. Immediate next actions
 
-1. Document both sides and pin labels of the exact STM32F411 and GY-BNO080 boards.
+1. Document both sides and pin labels of the exact STM32F411 and ICM-20948 v2 breakout boards.
 2. Confirm the 25 MHz HSE and decide whether USB CDC is required.
 3. Build the complete pin inventory and CubeMX timer allocation.
 4. Measure motor encoder logic voltage and determine pull-up requirements.
@@ -533,4 +558,4 @@ Edge balancing may be released later if it is not reliable enough for v0.1.0.
 7. Bring up one PWM channel and motor at low command.
 8. Bring up its encoder in timer encoder mode.
 9. Repeat for all motors and encoders.
-10. Implement BNO080 communication and log quaternion, gyro, interval, age, and accuracy before writing balance-control code.
+10. Implement ICM-20948 v2 communication and log quaternion, gyro, interval, age, and accuracy before writing balance-control code.
