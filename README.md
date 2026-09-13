@@ -14,7 +14,7 @@ This version replaces the original ESP32 and MPU6050 with:
 
 ## Project status
 
-**Current phase: planning and hardware bring-up.**
+**Current phase: planning and hardware bring-up.** (this needs to be updated to reflect current progress... currently on software integration)
 
 The physical assembly and most electrical components are available. Firmware is being redesigned for the STM32F411 and ICM-20948 v2; stable balancing firmware has not yet been released.
 
