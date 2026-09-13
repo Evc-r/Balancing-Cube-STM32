@@ -1,10 +1,18 @@
 # STM32F411/ICM-20948 v2 Self-Balancing Cube Project Plan
 
+## Current progress
+
+CAD and mechanical assembly are completed. The first custom four-layer PCB design is completed and was sent for fabrication. The project is moving into firmware development/software integration. PCB rework and electrical validation are still pending; firmware bring-up and successful balancing have not been verified.
+
+The custom PCB is part of the current build. A VBAT connection may bypass the protection circuit; a bodge repair is planned, but its completion and effectiveness are unverified. The STM32 header spacing is incorrect, so a wired STM32 connection is planned. The J7 IMU connector is unavailable, so directly soldering its wiring is planned. These repairs and connections have not been verified.
+
+The architecture, rates, and interfaces below are **implementation targets**, not measured performance or completed firmware. M0 remains an open validation gate; M1–M9 are upcoming milestones. See [README.md](README.md) for the status summary and [JOURNAL.md](JOURNAL.md) for progress notes.
+
 ## 1. Goal
 
 Port and improve the control system from [remrc/Self-Balancing-Cube](https://github.com/remrc/Self-Balancing-Cube) for this hardware:
 
-- STM32F411CEU6 microcontroller, using the board's 25 MHz HSE and a 100 MHz system clock
+- STM32F411CEU6 microcontroller, with an assumed 25 MHz HSE to confirm and a target 100 MHz system clock
 - ICM-20948 v2 breakout IMU
 - Three Nidec 24H reaction-wheel motors with direction, active-low PWM, shared brake, and quadrature encoders
 - 3S LiPo power system
@@ -15,6 +23,7 @@ The first release target is safe, repeatable vertex balancing. Edge balancing an
 
 ### Included
 
+- Integration and validation of the existing custom four-layer PCB
 - Native STM32CubeIDE/HAL firmware
 - Three 20 kHz motor PWM outputs
 - Three direction outputs and one shared brake output
@@ -33,7 +42,6 @@ The first release target is safe, repeatable vertex balancing. Edge balancing an
 - WS2812 status LEDs
 - Automated gain tuning
 - Jump-up maneuver
-- Custom PCB
 
 ## 3. Main changes from the reference firmware
 
@@ -47,7 +55,7 @@ The first release target is safe, repeatable vertex balancing. Edge balancing an
 | Accelerometer offset calibration | Quaternion reference calibration |
 | EEPROM API | Internal Flash record with version and CRC |
 | BluetoothSerial | USB CDC or UART first; external wireless later |
-| 15 ms millis loop | Deterministic 100 Hz hardware-timed loop |
+| 15 ms millis loop | Deterministic 200 Hz hardware-timed loop |
 
 The original three-wheel mixing and controller structure will be retained only after signs, units, and scaling are verified.
 
@@ -111,6 +119,7 @@ Docs/
 Tests/
 PROJECT_PLAN.md
 README.md
+JOURNAL.md
 ```
 
 Keep hardware access outside the controller mathematics so transforms, mixing, safety logic, and quaternion calculations can be unit tested.
@@ -399,12 +408,14 @@ Invalid magic, version, length, or CRC must load safe defaults and require calib
 
 ### M0 - Hardware confirmation
 
+- Document and verify the planned VBAT/protection repair before powering the integrated system; confirm the intended power path and protection behavior.
+- Map and continuity-check the planned wired STM32 connection and direct-soldered IMU connection.
 - Record exact STM32 board and ICM-20948 v2 breakout module.
 - Confirm motor connector, encoder type, and logic voltage.
 - Confirm battery, regulator, divider, and brake wiring.
 - Complete a conflict-free CubeMX draft pin map.
 
-Exit: no unresolved voltage-level or pin-allocation questions.
+Exit: planned repairs and connections are completed and verified, the intended power path and protection behavior are confirmed, and no voltage-level or pin-allocation questions remain.
 
 ### M1 - STM32 bring-up
 
@@ -548,6 +559,8 @@ The first successful release requires:
 Edge balancing may be released later if it is not reliable enough for v0.1.0.
 
 ## 18. Immediate next actions
+
+Before powered bring-up: document the PCB rework, verify the intended power path and protection behavior after the planned repair, and check the STM32/IMU wiring against the schematic. Add CAD, KiCad sources, and photos to the repository as they become available. Start session-based journaling and time tracking with firmware work.
 
 1. Document both sides and pin labels of the exact STM32F411 and ICM-20948 v2 breakout boards.
 2. Confirm the 25 MHz HSE and decide whether USB CDC is required.
