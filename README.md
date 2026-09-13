@@ -14,21 +14,43 @@ This version replaces the original ESP32 and MPU6050 with:
 
 ## Project status
 
-**Current phase: planning and hardware bring-up.** (this needs to be updated to reflect current progress... currently on software integration)
+**Current phase: transitioning into firmware development and software integration.** CAD and the first custom PCB design are complete; electrical bring-up and balancing validation remain ahead.
 
-The physical assembly and most electrical components are available. Firmware is being redesigned for the STM32F411 and ICM-20948 v2; stable balancing firmware has not yet been released.
+| Area | Current progress |
+|---|---|
+| Mechanical design / CAD | Complete for the current build |
+| Mechanical assembly | Frame and reaction-wheel assembly completed; final wiring/integration remains |
+| Custom four-layer PCB | First design complete and sent for fabrication; known issues require rework and validation |
+| STM32 connection | Header spacing mismatch identified; plan to connect the board through wires |
+| IMU connection | J7 connector unavailable; plan to solder the IMU wiring directly |
+| Firmware | Next active development phase: STM32 project setup, peripheral bring-up, and integration |
+| Closed-loop balancing | Not yet demonstrated or validated |
 
-Development priorities:
+### Current hardware issues
 
-1. Verify power, signal voltages, and pin allocation.
-2. Bring up safe motor PWM and brake control.
-3. Validate all three quadrature encoders.
+- **Power protection:** an unintended VBAT connection was identified that may bypass the protection stage. A trace-isolation/bodge-wire repair is planned. The repair and its effectiveness have not yet been verified.
+- **STM32 header spacing:** the PCB's two long header rows do not match the STM32 board. A wired connection is planned, with a pin-by-pin wiring map and continuity checks before power-up.
+- **IMU J7 connection:** direct-soldered wiring is planned because the connector is unavailable. Pin order, logic compatibility, and strain relief still need verification.
+
+These are open integration tasks, not completed fixes. The first PCB revision should not be treated as a validated design for replication.
+
+### Next milestones
+
+1. Document the as-built wiring and verify the PCB rework, power rails, and pin allocation.
+2. Create the STM32CubeIDE project and establish basic diagnostics.
+3. Bring up safe motor PWM/brake control and validate the encoders.
 4. Integrate and characterize the ICM-20948 v2.
-5. Implement calibration and fault handling.
-6. Tune vertex balancing.
-7. Add edge balancing and usability features.
+5. Implement attitude estimation, calibration, and fault handling.
+6. Perform output-limited control tests, then tune vertex balancing.
+7. Add edge balancing and usability features after the initial controller is reliable.
 
-See [PROJECT_PLAN.md](PROJECT_PLAN.md) for the complete architecture, milestones, risks, and acceptance criteria.
+See [JOURNAL.md](JOURNAL.md) for retrospective CAD/PCB notes and future session logs, and [PROJECT_PLAN.md](PROJECT_PLAN.md) for the planned architecture and acceptance criteria.
+
+### Documentation and project files
+
+The repository currently contains project documentation, not a buildable firmware release. CAD, KiCad source files, manufacturing outputs, photos, and firmware still need to be added here. The existing [project media folder](https://drive.google.com/drive/folders/1Wyz73s2HkP9Nr1Q7drfzrUGMNGJb-3j-?usp=drive_link) is linked for reference.
+
+Earlier CAD/PCB work is documented retrospectively without reconstructed work hours. Future sessions should record what changed, evidence, test results, and actual tracked time.
 
 ## Why this is a firmware port, not a board substitution
 
@@ -43,7 +65,7 @@ The original Arduino/ESP32 sketch cannot be compiled unchanged for this hardware
 | ESP32 LEDC PWM | STM32 timer PWM |
 | EEPROM API | Versioned internal Flash record with CRC |
 | BluetoothSerial | USB CDC or UART initially |
-| 15 ms `millis()` loop | Deterministic 100 Hz hardware-timed loop |
+| 15 ms `millis()` loop | Deterministic 200 Hz hardware-timed loop |
 
 The original three-wheel coordinate transformations and controller concept remain useful, but controller gains, timing, calibration, drivers, and safety behavior must be implemented and tested again.
 
@@ -52,7 +74,7 @@ The original three-wheel coordinate transformations and controller concept remai
 ### Required core components
 
 - STM32F411CEU6 board, typically a Black Pill-style board
-- ICM-20948 v2 breakout breakout
+- ICM-20948 v2 breakout
 - Three Nidec 24H motors with integrated motor electronics and encoder outputs
 - 3S LiPo battery and suitable connector
 - Regulated logic supply appropriate for the selected STM32 board and peripherals
@@ -78,6 +100,8 @@ Do not assume that a module accepting 5 V power also has 5 V-safe signal pins.
 
 ## Planned firmware architecture
 
+The architecture, interfaces, safety behavior, and timing values below are implementation targets. Firmware bring-up, execution timing, and successful balancing have not been verified.
+
 ```text
 ICM-20948 v2 interrupt
     -> SPI or I2C transfer
@@ -86,7 +110,7 @@ ICM-20948 v2 interrupt
     -> STM32 attitude estimator
     -> latest timestamped quaternion and angular rate
 
-100 Hz control timer
+200 Hz control timer
     -> validate IMU freshness
     -> read three encoder counters
     -> calculate quaternion balance error
@@ -107,7 +131,7 @@ Serial output, Flash writes, and blocking IMU transfers must never run inside th
 
 ## Clock and timing
 
-A 25 MHz crystal is the external clock source, not the intended CPU speed. The STM32F411 will be configured through its PLL for a target system clock of **100 MHz**.
+A 25 MHz external crystal is assumed for the selected board and still needs confirmation; it is not the intended CPU speed. The STM32F411 will be configured through its PLL for a target system clock of **100 MHz**.
 
 Initial timing targets:
 
@@ -117,7 +141,7 @@ Initial timing targets:
 | STM32 attitude estimator | 500 Hz initially |
 | Balance controller | 200 Hz initially |
 | Motor PWM | 20 kHz |
-| Maximum accepted IMU age | 30 ms initially |
+| Maximum accepted IMU age | 15 ms initially |
 
 The final CubeMX clock tree must also produce a valid peripheral clock if USB CDC is enabled.
 
@@ -224,6 +248,7 @@ Core/Src/                Application and driver implementation
 Drivers/                 STM32 HAL and device support
 Docs/                    Wiring, coordinate frames, calibration, and tuning
 Tests/                   Host-side and hardware test support
+JOURNAL.md               Retrospective hardware notes and future session logs
 PROJECT_PLAN.md          Detailed engineering plan
 README.md                 Project overview and bring-up guide
 ```
