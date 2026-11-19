@@ -427,6 +427,8 @@ This project is derived from and inspired by Remigijus's [Self-Balancing-Cube](h
 
 This repository is an independent STM32F411/ICM-20948 v2 port and will require new firmware, calibration, validation, and gain tuning.
 
+Contributor: Ashwathram Prathap ([@ashwathram-prathap](https://github.com/ashwathram-prathap)).
+
 ## License
 
 No license has been selected yet. Until a license file is added, normal copyright restrictions apply to original work in this repository. Any reused or adapted material must continue to comply with its original licensing terms.
